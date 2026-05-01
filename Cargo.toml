@@ -3,6 +3,9 @@ members = [
     "crates/exp",
     "crates/copy_fail_guard",
 ]
+exclude = [
+    "crates/copy_fail_guard-ebpf",
+]
 resolver = "3"
 
 # The eBPF crate (crates/copy_fail_guard-ebpf) is NOT a workspace member.
