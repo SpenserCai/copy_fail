@@ -13,6 +13,8 @@ crates/
 ├── exp/                        # Exploit PoC (Rust reimplementation)
 ├── copy_fail_guard/            # Userspace eBPF loader (defense tool)
 └── copy_fail_guard-ebpf/       # eBPF LSM program (kernel-side, not in workspace)
+scripts/
+└── build_guard.sh              # One-click build script → outputs to dist/
 ```
 
 ## Vulnerability overview
@@ -126,9 +128,26 @@ Blocking `AF_ALG` has **near-zero impact** on typical systems:
 
 ### Building
 
-The eBPF program and userspace loader are built separately.
+**One-click build** (recommended):
 
-**Step 1: Compile the eBPF program** (must be done on Linux):
+```bash
+./scripts/build_guard.sh
+```
+
+This automatically installs missing toolchains (nightly, bpf-linker), compiles both the eBPF program and the userspace loader, and outputs everything to `dist/`:
+
+```
+dist/
+├── copy_fail_guard.bpf.o   # eBPF LSM program
+├── copy_fail_guard          # Userspace loader binary
+└── run_guard.sh             # One-click loader: sudo ./run_guard.sh
+```
+
+Copy the `dist/` directory to any target machine and run `sudo ./run_guard.sh` to activate protection.
+
+**Manual build** (step by step):
+
+Step 1: Compile the eBPF program (must be done on Linux):
 
 ```bash
 cd crates/copy_fail_guard-ebpf
