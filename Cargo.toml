@@ -1,0 +1,11 @@
+[package]
+name = "copy_fail"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+
+[workspace]
+
+[dependencies]
+libc = "0.2"
+flate2 = "1"
