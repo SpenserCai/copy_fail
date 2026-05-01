@@ -10,11 +10,13 @@ Sources: [copy.fail](https://copy.fail), [The Hacker News](https://thehackernews
 
 ```
 crates/
-├── exp/                        # Exploit PoC (Rust reimplementation)
-├── copy_fail_guard/            # Userspace eBPF loader (defense tool)
-└── copy_fail_guard-ebpf/       # eBPF LSM program (kernel-side, not in workspace)
+├── exp/                            # Exploit PoC (Rust reimplementation)
+├── copy_fail_guard/                # Userspace eBPF loader — LSM mode
+├── copy_fail_guard-ebpf/           # eBPF LSM program (not in workspace)
+├── copy_fail_guard_kprobe/         # Userspace eBPF loader — kprobe mode
+└── copy_fail_guard_kprobe-ebpf/    # eBPF kprobe program (not in workspace)
 scripts/
-└── build_guard.sh              # One-click build script → outputs to dist/
+└── build_guard.sh                  # One-click build → outputs to dist/
 ```
 
 ## Vulnerability overview
@@ -63,42 +65,37 @@ The binary is Linux-only. On other platforms it exits with an `Unsupported` erro
 
 4. **Not vulnerable** (patched kernel): the AF_ALG operation fails or the `su` binary behaves normally. You'll see an error or a regular `su` password prompt.
 
-## crates/copy_fail_guard — eBPF LSM defense tool
+## Defense tool — copy_fail_guard
 
-A runtime kernel defense that blocks CVE-2026-31431 **without upgrading the kernel**. It uses eBPF LSM (Linux Security Modules) to hook `socket_create` and deny `AF_ALG` socket creation from userspace, cutting off the exploit's first step.
+A runtime kernel defense that blocks CVE-2026-31431 **without upgrading the kernel or rebooting**. It uses eBPF to intercept `AF_ALG` socket creation, cutting off the exploit's first step.
+
+Two modes are provided. The one-click loader auto-selects the best available mode:
+
+| | LSM mode | kprobe mode |
+|---|---|---|
+| **How it blocks** | Returns `-EPERM` (socket creation denied) | `SIGKILL` (process killed) |
+| **Kernel requirement** | ≥ 5.7 with `lsm=bpf` boot parameter | ≥ 5.3, no special parameters |
+| **Needs reboot to enable** | Maybe (if `lsm=bpf` not already set) | **No** |
+| **Hook point** | `socket_create` LSM hook | `__sys_socket` kprobe |
 
 ### How it works
 
 ```
-┌──────────────────────────────────────────┐
-│  Userspace loader  (copy_fail_guard)     │
-│  • Loads the eBPF object file            │
-│  • Attaches to LSM hook                  │
-│  • Runs until Ctrl-C (then detaches)     │
-└──────────────┬───────────────────────────┘
-               │ attach
-┌──────────────▼───────────────────────────┐
-│  eBPF LSM program  (block_af_alg)        │
-│  Hook: socket_create(family, type,       │
-│                      protocol, kern)     │
-│  Logic:                                  │
-│    if family == 38 (AF_ALG)              │
-│       && kern == 0 (userspace caller)    │
-│    → return -EPERM (deny)                │
-│    else → return 0 (allow)               │
-└──────────────────────────────────────────┘
+┌──────────────────────────────────────────────────┐
+│  run_guard.sh                                    │
+│  • Detects BPF LSM support                       │
+│  • LSM available  → copy_fail_guard (EPERM)      │
+│  • LSM unavailable → copy_fail_guard_kprobe (KILL)│
+└──────────────┬───────────────────────────────────┘
+               │
+┌──────────────▼───────────────────────────────────┐
+│  eBPF program                                    │
+│  if socket family == 38 (AF_ALG)                 │
+│     → block (EPERM or SIGKILL)                   │
+│  else                                            │
+│     → allow                                      │
+└──────────────────────────────────────────────────┘
 ```
-
-The exploit chain requires creating an `AF_ALG` socket as the very first step. Blocking this at the LSM level makes the entire attack impossible.
-
-### Why this approach
-
-| Approach | Pros | Cons |
-|---|---|---|
-| **Upgrade kernel** | Complete fix | Requires reboot; LTS/embedded update cycles are slow; may regress |
-| **Blacklist algif_aead module** | Simple | Doesn't work if module is built-in; requires reboot for initcall blacklist |
-| **seccomp filter** | Per-process | Must be applied to every process; doesn't protect existing processes |
-| **eBPF LSM (this tool)** | System-wide, hot-loadable, no reboot, no kernel rebuild | Requires kernel ≥ 5.7 with `lsm=bpf` enabled |
 
 ### Impact on the system
 
@@ -106,25 +103,7 @@ Blocking `AF_ALG` has **near-zero impact** on typical systems:
 
 - **Not affected**: dm-crypt/LUKS, kTLS, IPsec/XFRM, OpenSSL/GnuTLS/NSS (default builds), SSH, kernel keyring crypto — these use the in-kernel crypto API directly, not through `AF_ALG`
 - **Potentially affected**: applications explicitly configured to use `AF_ALG` (e.g. OpenSSL with the `afalg` engine enabled, some embedded crypto offload paths)
-- **Performance**: zero overhead for anything not calling `socket(AF_ALG, ...)`. The LSM hook check is a single integer comparison
-
-### Prerequisites
-
-1. **Linux kernel ≥ 5.7** (BPF LSM support)
-2. **BPF LSM enabled** — verify with:
-   ```bash
-   cat /sys/kernel/security/lsm
-   # Output should contain "bpf", e.g.: capability,lockdown,yama,bpf
-   ```
-   If `bpf` is missing, add it to kernel boot parameters:
-   ```bash
-   # Edit /etc/default/grub:
-   GRUB_CMDLINE_LINUX="lsm=lockdown,yama,bpf"
-   # Then:
-   sudo update-grub && sudo reboot
-   ```
-3. **Root privileges** to load the eBPF program
-4. **bpf-linker** to compile the eBPF crate (install with `cargo install bpf-linker`)
+- **Performance**: zero overhead for anything not calling `socket(AF_ALG, ...)`
 
 ### Building
 
@@ -134,66 +113,95 @@ Blocking `AF_ALG` has **near-zero impact** on typical systems:
 ./scripts/build_guard.sh
 ```
 
-This automatically installs missing toolchains (nightly, bpf-linker), compiles both the eBPF program and the userspace loader, and outputs everything to `dist/`:
+This automatically installs missing toolchains (nightly, bpf-linker), compiles all eBPF programs and userspace loaders, and outputs everything to `dist/`:
 
 ```
 dist/
-├── copy_fail_guard.bpf.o   # eBPF LSM program
-├── copy_fail_guard          # Userspace loader binary
-└── run_guard.sh             # One-click loader: sudo ./run_guard.sh
+├── copy_fail_guard.bpf.o          # eBPF LSM program
+├── copy_fail_guard_kprobe.bpf.o   # eBPF kprobe program
+├── copy_fail_guard                 # Userspace loader (LSM)
+├── copy_fail_guard_kprobe          # Userspace loader (kprobe)
+└── run_guard.sh                    # Auto-select: sudo ./run_guard.sh
 ```
 
 Copy the `dist/` directory to any target machine and run `sudo ./run_guard.sh` to activate protection.
 
 **Manual build** (step by step):
 
-Step 1: Compile the eBPF program (must be done on Linux):
+Step 1: Compile the eBPF programs (must be done on Linux):
 
 ```bash
+# LSM variant
 cd crates/copy_fail_guard-ebpf
+cargo +nightly build --target bpfel-unknown-none -Z build-std=core --release
+
+# kprobe variant
+cd crates/copy_fail_guard_kprobe-ebpf
 cargo +nightly build --target bpfel-unknown-none -Z build-std=core --release
 ```
 
-The output is at `target/bpfel-unknown-none/release/copy_fail_guard`.
-
-**Step 2: Build the userspace loader**:
+**Step 2: Build the userspace loaders**:
 
 ```bash
-cargo build --release -p copy_fail_guard
+cargo build --release -p copy_fail_guard -p copy_fail_guard_kprobe
 ```
 
 ### Running
 
+**Recommended** — auto-selects the best mode:
+
 ```bash
-# Point the loader to the compiled eBPF object and run as root
-sudo GUARD_BPF_OBJ=crates/copy_fail_guard-ebpf/target/bpfel-unknown-none/release/copy_fail_guard \
-     RUST_LOG=info \
-     ./target/release/copy_fail_guard
+sudo ./dist/run_guard.sh
 ```
 
-Once running, any attempt to create an `AF_ALG` socket from userspace will be denied with `EPERM`. The exploit PoC will fail at its first step.
+**Manual** — run a specific mode:
+
+```bash
+# LSM mode (requires lsm=bpf)
+sudo GUARD_BPF_OBJ=path/to/copy_fail_guard.bpf.o RUST_LOG=info ./copy_fail_guard
+
+# kprobe mode (works everywhere)
+sudo GUARD_BPF_OBJ=path/to/copy_fail_guard_kprobe.bpf.o RUST_LOG=info ./copy_fail_guard_kprobe
+```
 
 Press `Ctrl-C` to detach the eBPF program and restore normal behavior.
 
 ### Verifying the defense
 
-With `copy_fail_guard` running in one terminal:
+With the guard running in one terminal:
 
 ```bash
 # In another terminal, try the exploit:
 ./target/release/copy_fail
-# Expected: "error: Operation not permitted" (socket creation blocked)
+# LSM mode:   "error: Operation not permitted"
+# kprobe mode: "已杀死" / "Killed"
 
 # Or test directly with Python:
 python3 -c "import socket; socket.socket(38, 5, 0)"
-# Expected: PermissionError: [Errno 1] Operation not permitted
+# LSM mode:   PermissionError: [Errno 1] Operation not permitted
+# kprobe mode: Killed
 ```
 
 ### Current limitations
 
 - **No whitelist support yet** — the current version blocks ALL userspace `AF_ALG` socket creation unconditionally. There is no mechanism to exempt specific processes by PID, cgroup, or command name. This is planned for a future version (via eBPF HashMap maps). For the vast majority of systems this is fine since almost nothing uses `AF_ALG`.
-- The eBPF crate must be compiled separately on Linux with `bpf-linker` (it targets `bpfel-unknown-none` and cannot be a normal workspace member).
+- The eBPF crates must be compiled separately on Linux with `bpf-linker` (they target `bpfel-unknown-none` and cannot be normal workspace members).
 - Protection is active only while the loader process is running. For persistent protection, run it as a systemd service.
+
+### Enabling BPF LSM (optional, for LSM mode)
+
+Most distributions do not enable BPF LSM by default. If you want the cleaner LSM mode (EPERM instead of SIGKILL):
+
+```bash
+# Check current LSMs:
+cat /sys/kernel/security/lsm
+
+# If "bpf" is missing, add it:
+sudo sed -i 's/^GRUB_CMDLINE_LINUX="\(.*\)"/GRUB_CMDLINE_LINUX="\1 lsm=lockdown,capability,yama,apparmor,bpf"/' /etc/default/grub
+sudo update-grub && sudo reboot
+```
+
+The kprobe mode works without this step.
 
 ## Verifying the kernel fix
 
