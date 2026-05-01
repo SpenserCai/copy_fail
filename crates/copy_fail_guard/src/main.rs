@@ -10,6 +10,11 @@ mod inner {
     pub fn run() -> Result<()> {
         env_logger::init();
 
+        let rt = tokio::runtime::Runtime::new()?;
+        rt.block_on(async { run_async().await })
+    }
+
+    async fn run_async() -> Result<()> {
         let ebpf_path = PathBuf::from(
             std::env::var("GUARD_BPF_OBJ").unwrap_or_else(|_| {
                 "/opt/copy_fail_guard/copy_fail_guard.bpf.o".to_string()
@@ -36,9 +41,7 @@ mod inner {
         info!("copy_fail_guard: AF_ALG socket creation is now blocked (CVE-2026-31431 mitigation active)");
         info!("copy_fail_guard: press Ctrl-C to detach and exit");
 
-        // Block until signal
-        let rt = tokio::runtime::Runtime::new()?;
-        rt.block_on(tokio::signal::ctrl_c())?;
+        tokio::signal::ctrl_c().await?;
 
         info!("copy_fail_guard: detaching, AF_ALG protection removed");
         Ok(())

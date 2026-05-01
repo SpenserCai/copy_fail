@@ -9,6 +9,11 @@ mod inner {
     pub fn run() -> Result<()> {
         env_logger::init();
 
+        let rt = tokio::runtime::Runtime::new()?;
+        rt.block_on(async { run_async().await })
+    }
+
+    async fn run_async() -> Result<()> {
         let ebpf_path = PathBuf::from(
             std::env::var("GUARD_BPF_OBJ").unwrap_or_else(|_| {
                 "/opt/copy_fail_guard/copy_fail_guard_kprobe.bpf.o".to_string()
@@ -35,8 +40,7 @@ mod inner {
         info!("copy_fail_guard_kprobe: processes creating AF_ALG sockets will be killed (SIGKILL)");
         info!("copy_fail_guard_kprobe: press Ctrl-C to detach and exit");
 
-        let rt = tokio::runtime::Runtime::new()?;
-        rt.block_on(tokio::signal::ctrl_c())?;
+        tokio::signal::ctrl_c().await?;
 
         info!("copy_fail_guard_kprobe: detaching, AF_ALG protection removed");
         Ok(())
