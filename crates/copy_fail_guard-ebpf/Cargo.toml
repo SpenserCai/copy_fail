@@ -9,7 +9,7 @@ name = "copy_fail_guard"
 path = "src/main.rs"
 
 [dependencies]
-aya-ebpf = "0.1.2"
+aya-ebpf = "0.1.0"
 aya-log-ebpf = "0.1.0"
 
 [profile.dev]
