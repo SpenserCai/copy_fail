@@ -1,0 +1,22 @@
+[package]
+name = "copy_fail_guard-ebpf"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+
+[[bin]]
+name = "copy_fail_guard"
+path = "src/main.rs"
+
+[dependencies]
+aya-ebpf = "0.1.1"
+aya-log-ebpf = "0.1.1"
+
+[profile.dev]
+opt-level = 2
+debug = false
+debug-assertions = false
+overflow-checks = false
+
+[profile.release]
+lto = true

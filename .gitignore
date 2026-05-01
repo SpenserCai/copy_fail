@@ -3,3 +3,9 @@
 **/*.rs.bk
 Cargo.lock
 .cargo/
+
+# ===== eBPF =====
+crates/copy_fail_guard-ebpf/target/
+
+# ===== Build output =====
+/dist/
