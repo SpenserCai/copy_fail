@@ -2,11 +2,14 @@
 members = [
     "crates/exp",
     "crates/copy_fail_guard",
+    "crates/copy_fail_guard_kprobe",
 ]
 exclude = [
     "crates/copy_fail_guard-ebpf",
+    "crates/copy_fail_guard_kprobe-ebpf",
 ]
 resolver = "3"
 
-# The eBPF crate (crates/copy_fail_guard-ebpf) is NOT a workspace member.
-# It targets bpfel-unknown-none and must be compiled separately with bpf-linker.
+# eBPF crates (copy_fail_guard-ebpf, copy_fail_guard_kprobe-ebpf) are NOT
+# workspace members. They target bpfel-unknown-none and must be compiled
+# separately with bpf-linker.

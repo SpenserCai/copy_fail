@@ -6,6 +6,7 @@ Cargo.lock
 
 # ===== eBPF =====
 crates/copy_fail_guard-ebpf/target/
+crates/copy_fail_guard_kprobe-ebpf/target/
 
 # ===== Build output =====
 /dist/
